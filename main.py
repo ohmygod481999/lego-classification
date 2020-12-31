@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, send_from_directory
 import os
 import tensorflow as tf
 from utils import getClassNames
@@ -10,49 +10,60 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///test.db'
 db = SQLAlchemy(app)
 
 
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=False)
+class Lego(db.Model):
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    path = db.Column(db.String(120), unique=True, nullable=False)
+    label = db.Column(db.Integer, db.ForeignKey('label.id'), nullable=True)
+    status = db.Column(db.String(30), nullable=True)
 
-    def __repr__(self):
-        return '<User %r>' % self.username
+class Label(db.Model):
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(50), unique=True)
 
-class_names = getClassNames()
+
+labels = db.session.query(Label).all()
+label_array = list(map(lambda x: x.name, labels))
 
 IMG_PATH = 'upload-img'
 
 @app.route('/predict')
 def predict():
     return render_template("predict.html")
+    
+@app.route(f'/{IMG_PATH}/<path:path>')
+def images(path):
+    return send_from_directory(IMG_PATH, path)
 
-@app.route('/list_user')
-def list_user():
-    users = db.session.query(User).all()
+@app.route('/api/labels')
+def getLabels():
+    labels = db.session.query(Label).all()
+    lbs = []
+    for lb in labels:
+        lbs.append({
+            'id': lb.id,
+            'name': lb.name
+        })
     return jsonify({
-        'user': users[0].username
+        'labels': lbs
     })
 
-@app.route('/add_user')
-def add_user():
-    user = User(id=2, username="hello", email="vuongbaolong48@gmail.com")
-    try:
-        db.session.add(user)
-        db.session.commit()
-    except:
-        return "some thing wrong"
-    return "ok"
-
-@app.route('/')
-def root():
+@app.route('/api/legos')
+def getLegos():
+    legos = db.session.query(Lego).all()
+    lgs = []
+    for lg in legos:
+        lgs.append({
+            'id': lg.id,
+            'path': lg.path,
+            'status': lg.status
+        })
     return jsonify({
-        "name": "hihihi"
+        'legos': lgs
     })
 
 @app.route('/api/predict', methods=['POST'])
 def predictImg():
     files = request.files
-    print(files)
     if 'img' not in files:
         return jsonify({
             'success': False
@@ -60,17 +71,23 @@ def predictImg():
     f = files['img']
     img_path = os.path.join(IMG_PATH, f.filename)
     f.save(img_path)
+    lego = Lego(path=IMG_PATH + '/' + f.filename, status="unlabel")
+    db.session.add(lego)
+    db.session.commit()
     img = tf.keras.preprocessing.image.load_img(img_path, target_size=(256,256))
     img_array = tf.keras.preprocessing.image.img_to_array(img)
     img_array = tf.expand_dims(img_array, 0) # Create a batch
     predictions = model.predict(img_array)
     scores = tf.nn.softmax(predictions[0])
     score_with_label = []
+    # get classnames
+    print(label_array)
     for i in range(len(scores)):
         score_with_label.append({
             'score': float(scores[i]),
-            'label': class_names[i]
+            'label': label_array[i]
         })
+    lego = Lego()
     sorted_score_with_label = sorted(score_with_label, key=lambda k: k['score'], reverse=True)
     return jsonify({
         'success': True,
